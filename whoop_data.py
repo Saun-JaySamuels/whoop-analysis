@@ -1,3 +1,5 @@
+print("Starting WHOOP DATA fetch...")
+
 import os
 import requests
 import webbrowser
@@ -68,4 +70,5 @@ for record in data.get("records", []):
     date = record["start"][:10]
     strain = score.get("strain", 0)
     avg_hr = score.get("average_heart_rate", 0)
-    print(f"Date: {date} | Strain: {round(strain, 1)} | Avg HR: {avg_hr}")
+    kilojoule = score.get("kilojoule", 0)
+    print(f"Date: {date} | Strain: {round(strain, 1)} | Avg HR: {avg_hr} | Kilojoule: {kilojoule}")
