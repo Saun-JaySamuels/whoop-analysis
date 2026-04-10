@@ -106,14 +106,20 @@ while True:
 
     page_number += 1
 
-# ---- PRINT EVERYTHING ----
+import csv
 
-print(f"\n--- YOUR WHOOP DATA ({len(all_records)} total records) ---\n")
+output_file = "whoop_data.csv"
 
-for record in all_records:
-    score = record.get("score", {})
-    date = record["start"][:10]
-    strain = score.get("strain", 0)
-    avg_hr = score.get("average_heart_rate", 0)
-    kilojoule = score.get("kilojoule", 0)
-    print(f"Date: {date} | Strain: {round(strain, 1)} | Avg HR: {avg_hr} | Kilojoule: {kilojoule}")
+with open(output_file, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["Date", "Strain", "Avg HR", "Kilojoule"])
+
+    for record in all_records:
+        score = record.get("score", {})
+        date = record["start"][:10]
+        strain = score.get("strain", 0)
+        avg_hr = score.get("average_heart_rate", 0)
+        kilojoule = score.get("kilojoule", 0)
+        writer.writerow([date, round(strain, 1), avg_hr, round(kilojoule, 2)])
+
+print(f"\nDone! Saved to {output_file} — {len(all_records)} total records")
