@@ -4,6 +4,8 @@ import os
 import requests
 import webbrowser
 import secrets
+import csv
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
@@ -16,7 +18,7 @@ REDIRECT_URI = "http://localhost:8000/callback"
 AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 
-# ---- LOGIN (unchanged) ----
+# AUTHENTICATION
 state = secrets.token_urlsafe(16)
 auth_params = {
     "client_id": CLIENT_ID,
@@ -56,70 +58,183 @@ token_response = requests.post(TOKEN_URL, data={
 ACCESS_TOKEN = token_response.json().get("access_token")
 print("Got token, fetching ALL your data...\n")
 
-# ---- NEW: FETCH ALL PAGES ----
-
 headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
 
-# We'll collect every record here instead of printing one page at a time
-all_records = []
 
-# "next_token" is like a bookmark — WHOOP gives you one at the end of each
-# page so you can ask for the next page. We start with None (no bookmark yet).
-next_token = None
+# Paginator
+def fetch_all(endpoint):
+    """Fetch every page from a WHOOP v1/v2 endpoint and return all records."""
+    all_records = []
+    next_token = None
+    page = 1
 
-page_number = 1
+    while True:
+        print(f"  Fetching page {page}...")
+        params = {"limit": 25}
+        if next_token:
+            params["nextToken"] = next_token
 
-# "while True" means: keep looping forever UNTIL we say "break"
-while True:
-    print(f"Fetching page {page_number}...")
+        response = requests.get(endpoint, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-    # Build the request parameters.
-    # We always ask for 25 records at a time (the max WHOOP allows).
-    params = {"limit": 25}
+        records = data.get("records", [])
+        all_records.extend(records)
+        print(f"    Got {len(records)} records (total: {len(all_records)})")
 
-    # If we have a bookmark from the previous page, include it so WHOOP
-    # knows where to continue from.
-    if next_token:
-        params["nextToken"] = next_token
+        next_token = data.get("next_token")
+        if not next_token:
+            break
+        page += 1
 
-    response = requests.get(
-        "https://api.prod.whoop.com/developer/v2/cycle",
-        headers=headers,
-        params=params        # <-- NEW: pass the pagination parameters
-    )
+    return all_records
 
-    data = response.json()
 
-    # Grab the records from this page and add them to our master list.
-    # (extend is like append, but adds a whole list at once)
-    records_this_page = data.get("records", [])
-    all_records.extend(records_this_page)
+# Fetch profile
+def fetch_profile():
+    r = requests.get("https://api.prod.whoop.com/developer/v2/user/profile/basic", headers=headers)
+    r.raise_for_status()
+    return r.json()
 
-    print(f"  Got {len(records_this_page)} records (total so far: {len(all_records)})")
+def fetch_body_measurement():
+    r = requests.get("https://api.prod.whoop.com/developer/v2/user/measurement/body", headers=headers)
+    r.raise_for_status()
+    return r.json()
 
-    # WHOOP includes a "next_token" field when there are more pages.
-    # If it's missing or empty, we've reached the last page — stop looping.
-    next_token = data.get("next_token")
-    if not next_token:
-        print("No more pages — all data fetched!")
-        break   # Exit the while loop
 
-    page_number += 1
+# Fetch each dataset
+print("Fetching cycles...")
+cycles = fetch_all("https://api.prod.whoop.com/developer/v2/cycle")
 
-import csv
+print("\nFetching recoveries...")
+recoveries = fetch_all("https://api.prod.whoop.com/developer/v2/recovery")
 
-output_file = "whoop_data.csv"
+print("\nFetching sleeps...")
+sleeps = fetch_all("https://api.prod.whoop.com/developer/v2/activity/sleep")
 
-with open(output_file, "w", newline="") as f:
+print("\nFetching workouts...")
+workouts = fetch_all("https://api.prod.whoop.com/developer/v2/activity/workout")
+
+print("\nFetching profile...")
+profile = fetch_profile()
+
+print("Fetching body measurements...")
+body = fetch_body_measurement()
+
+
+# Cycles CSV
+with open("whoop_cycles.csv", "w", newline="") as f:
     writer = csv.writer(f)
-    writer.writerow(["Date", "Strain", "Avg HR", "Kilojoule"])
+    writer.writerow([
+        "cycle_id", "user_id", "start", "end", "timezone_offset",
+        "score_state",
+        "strain", "avg_heart_rate", "max_heart_rate", "kilojoule",
+        "percent_recorded", "during_latest_workout",
+    ])
+    for r in cycles:
+        s = r.get("score") or {}
+        writer.writerow([
+            r.get("id"), r.get("user_id"), r.get("start"), r.get("end"),
+            r.get("timezone_offset"), r.get("score_state"),
+            s.get("strain"), s.get("average_heart_rate"), s.get("max_heart_rate"),
+            s.get("kilojoule"), s.get("percent_recorded"),
+            s.get("during_latest_workout"),
+        ])
+print(f"\nSaved whoop_cycles.csv ({len(cycles)} records)")
 
-    for record in all_records:
-        score = record.get("score", {})
-        date = record["start"][:10]
-        strain = score.get("strain", 0)
-        avg_hr = score.get("average_heart_rate", 0)
-        kilojoule = score.get("kilojoule", 0)
-        writer.writerow([date, round(strain, 1), avg_hr, round(kilojoule, 2)])
 
-print(f"\nDone! Saved to {output_file} — {len(all_records)} total records")
+# Recoveries CSV
+with open("whoop_recoveries.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow([
+        "cycle_id", "sleep_id", "user_id", "created_at", "updated_at",
+        "score_state",
+        "recovery_score", "resting_heart_rate", "hrv_rmssd_milli",
+        "spo2_percentage", "skin_temp_celsius",
+    ])
+    for r in recoveries:
+        s = r.get("score") or {}
+        writer.writerow([
+            r.get("cycle_id"), r.get("sleep_id"), r.get("user_id"),
+            r.get("created_at"), r.get("updated_at"), r.get("score_state"),
+            s.get("recovery_score"), s.get("resting_heart_rate"),
+            s.get("hrv_rmssd_milli"), s.get("spo2_percentage"),
+            s.get("skin_temp_celsius"),
+        ])
+print(f"Saved whoop_recoveries.csv ({len(recoveries)} records)")
+
+
+# Sleeps CSV
+with open("whoop_sleeps.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow([
+        "sleep_id", "user_id", "start", "end", "timezone_offset",
+        "nap", "score_state",
+        "total_in_bed_time_milli", "total_awake_time_milli",
+        "total_no_data_time_milli", "total_light_sleep_time_milli",
+        "total_slow_wave_sleep_time_milli", "total_rem_sleep_time_milli",
+        "sleep_cycle_count", "disturbance_count",
+        "baseline_milli", "need_from_strain_milli",
+        "need_from_sleep_debt_milli", "need_from_recent_strain_milli",
+        "need_from_recent_nap_milli", "sleep_needed_milli",
+        "respiratory_rate", "sleep_performance_percentage",
+        "sleep_consistency_percentage", "sleep_efficiency_percentage",
+    ])
+    for r in sleeps:
+        s = r.get("score") or {}
+        sn = s.get("sleep_needed") or {}
+        writer.writerow([
+            r.get("id"), r.get("user_id"), r.get("start"), r.get("end"),
+            r.get("timezone_offset"), r.get("nap"), r.get("score_state"),
+            s.get("total_in_bed_time_milli"), s.get("total_awake_time_milli"),
+            s.get("total_no_data_time_milli"), s.get("total_light_sleep_time_milli"),
+            s.get("total_slow_wave_sleep_time_milli"), s.get("total_rem_sleep_time_milli"),
+            s.get("sleep_cycle_count"), s.get("disturbance_count"),
+            sn.get("baseline_milli"), sn.get("need_from_strain_milli"),
+            sn.get("need_from_sleep_debt_milli"), sn.get("need_from_recent_strain_milli"),
+            sn.get("need_from_recent_nap_milli"), sn.get("sleep_needed_milli"),
+            s.get("respiratory_rate"), s.get("sleep_performance_percentage"),
+            s.get("sleep_consistency_percentage"), s.get("sleep_efficiency_percentage"),
+        ])
+print(f"Saved whoop_sleeps.csv ({len(sleeps)} records)")
+
+
+# Workouts CSV
+with open("whoop_workouts.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow([
+        "workout_id", "user_id", "start", "end", "timezone_offset",
+        "sport_id", "score_state",
+        "strain", "avg_heart_rate", "max_heart_rate", "kilojoule",
+        "percent_recorded", "distance_meter", "altitude_gain_meter",
+        "altitude_change_meter",
+        "zone_zero_milli", "zone_one_milli", "zone_two_milli",
+        "zone_three_milli", "zone_four_milli", "zone_five_milli",
+    ])
+    for r in workouts:
+        s = r.get("score") or {}
+        z = s.get("zone_duration") or {}
+        writer.writerow([
+            r.get("id"), r.get("user_id"), r.get("start"), r.get("end"),
+            r.get("timezone_offset"), r.get("sport_id"), r.get("score_state"),
+            s.get("strain"), s.get("average_heart_rate"), s.get("max_heart_rate"),
+            s.get("kilojoule"), s.get("percent_recorded"),
+            s.get("distance_meter"), s.get("altitude_gain_meter"),
+            s.get("altitude_change_meter"),
+            z.get("zone_zero_milli"), z.get("zone_one_milli"), z.get("zone_two_milli"),
+            z.get("zone_three_milli"), z.get("zone_four_milli"), z.get("zone_five_milli"),
+        ])
+print(f"Saved whoop_workouts.csv ({len(workouts)} records)")
+
+
+# Profile and body measurement JSON
+with open("whoop_profile.json", "w") as f:
+    json.dump({"profile": profile, "body_measurement": body}, f, indent=2)
+print("Saved whoop_profile.json")
+
+
+print("\n All done!")
+print(f"  Cycles:     {len(cycles)}")
+print(f"  Recoveries: {len(recoveries)}")
+print(f"  Sleeps:     {len(sleeps)}")
+print(f"  Workouts:   {len(workouts)}")
