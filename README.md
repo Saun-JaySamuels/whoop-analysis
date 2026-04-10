@@ -6,7 +6,7 @@ Fetches your personal WHOOP biometric data via the WHOOP Developer API and expor
 
 ## What it does
 
-Authenticates with the WHOOP API using OAuth 2.0, then fetches your complete history across four data types — paginating through every available record — and saves each to a CSV:
+Authenticates with the WHOOP API using OAuth 2.0, then fetches your complete history across four data types while paginating through every available record, and saves each to a CSV:
 
 | File | Contents |
 |---|---|
@@ -62,7 +62,7 @@ WHOOP_CLIENT_ID=your_client_id_here
 WHOOP_CLIENT_SECRET=your_client_secret_here
 ```
 
-This file is excluded from Git via `.gitignore` — never commit it.
+This file is excluded from Git via `.gitignore` never commit it.
 
 ---
 
